@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Announcement Notes</title>
+  <link rel="shortcut icon" href="https://cdn3.iconfinder.com/data/icons/education-209/64/paper-clip-academic-note-exam-256.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Announcement Notes</h1>
+  
+  <form id="announcementForm">
+    <label for="title">Title:</label>
+    <input type="text" id="title" required>
+    <label for="description">Description:</label>
+    <textarea id="description" required></textarea>
+    <button type="submit">Add Note</button>
+  </form>
+
+  <div class="notes-container" id="notesContainer"></div>
+
+  <script>
+    function displayNotes(notes) {
+      const notesContainer = document.getElementById('notesContainer');
+      notesContainer.innerHTML = '';
+
+      notes.forEach((note) => {
+        const noteDiv = document.createElement('div');
+        noteDiv.innerHTML = `
+          <h3>${note.title}</h3>
+          <p>${note.description}</p>
+          <p>Date & Time: ${note.datetime}</p>
+          <button onclick="editNote(${note.id})">Edit</button>
+          <button onclick="deleteNote(${note.id})">Delete</button>
+        `;
+        notesContainer.appendChild(noteDiv);
+      });
+    }
+
+    function addNote() {
+      const title = document.getElementById('title').value;
+      const description = document.getElementById('description').value;
+      const dateTime = new Date().toLocaleString();
+
+      fetch('http://localhost:3000/api/announcements', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ title, description, dateTime })
+      })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error('Failed to add note');
+        }
+        return response.json();
+      })
+      .then(() => {
+        fetchNotes();
+        document.getElementById('announcementForm').reset();
+      })
+      .catch(error => console.error('Error:', error));
+    }
+
+    function fetchNotes() {
+      fetch('http://localhost:3000/api/announcements')
+      .then(response => {
+        if (!response.ok) {
+          throw new Error('Failed to fetch notes');
+        }
+        return response.json();
+      })
+      .then(data => {
+        displayNotes(data.announcements);
+      })
+      .catch(error => console.error('Error:', error));
+    }
+
+    function editNote(id) {
+      const newTitle = prompt('Enter new title:');
+      const newDescription = prompt('Enter new description:');
+
+      if (newTitle && newDescription) {
+        const dateTime = new Date().toLocaleString();
+
+        fetch(`http://localhost:3000/api/announcements/${id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ title: newTitle, description: newDescription, dateTime })
+        })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error('Failed to edit note');
+          }
+          fetchNotes();
+        })
+        .catch(error => console.error('Error:', error));
+      }
+    }
+
+    function deleteNote(id) {
+      if (confirm('Are you sure you want to delete this note?')) {
+        fetch(`http://localhost:3000/api/announcements/${id}`, {
+          method: 'DELETE'
+        })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error('Failed to delete note');
+          }
+          fetchNotes();
+        })
+        .catch(error => console.error('Error:', error));
+      }
+    }
+
+    // Display existing notes on page load
+    fetchNotes();
+    setInterval(fetchNotes, 1000);
+
+    // Event listener for form submission
+    document.getElementById('announcementForm').addEventListener('submit', function(event) {
+      event.preventDefault();
+      addNote();
+    });
+  </script>
+</body>
+</html>
