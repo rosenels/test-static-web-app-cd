@@ -1,129 +1,571 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>Announcement Notes</title>
-  <link rel="shortcut icon" href="https://cdn3.iconfinder.com/data/icons/education-209/64/paper-clip-academic-note-exam-256.png">
-  <link rel="stylesheet" href="style.css">
+    <title>Active Flights Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+    <style>
+        html {
+            height: 100%;
+        }
+        body {
+            margin-top: 0px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        #map {
+            height: 60%;
+            width: 100%;
+        }
+        #flight-info {
+            padding: 10px;
+            border-top: 1px solid #ccc;
+            flex: 1;
+            overflow-y: auto;
+        }
+        .airplane-icon, .ground_vehicle-icon {
+            transform-origin: center;
+        }
+        .leaflet-div-icon {
+            background-color: transparent;
+            border: 0px;
+        }
+        .map-label-above-icon {
+            margin: 0px;
+            position: absolute;
+            left: -16px;
+            right: -16px;
+            text-align: center;
+        }
+    </style>
 </head>
 <body>
-  <h1>Announcement Notes</h1>
-  
-  <form id="announcementForm">
-    <label for="title">Title:</label>
-    <input type="text" id="title" required>
-    <label for="description">Description:</label>
-    <textarea id="description" required></textarea>
-    <button type="submit">Add Note</button>
-  </form>
+    <div id="map"></div>
+    <div id="flight-info">
+        <h2>Flight Information</h2>
+        <div id="flight-details"></div>
+    </div>
+    <audio id="bell-audio">
+        <source src="bell.mp3" type="audio/mpeg">
+    </audio>
 
-  <div class="notes-container" id="notesContainer"></div>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script>
+        function initMap() {
+            map = L.map('map').setView([42.694771, 23.413245], 15);
 
-  <script>
-    function displayNotes(notes) {
-      const notesContainer = document.getElementById('notesContainer');
-      notesContainer.innerHTML = '';
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+            }).addTo(map);
 
-      notes.forEach((note) => {
-        const noteDiv = document.createElement('div');
-        noteDiv.innerHTML = `
-          <h3>${note.title}</h3>
-          <p>${note.description}</p>
-          <p>Date & Time: ${note.datetime}</p>
-          <button onclick="editNote(${note.id})">Edit</button>
-          <button onclick="deleteNote(${note.id})">Delete</button>
-        `;
-        notesContainer.appendChild(noteDiv);
-      });
-    }
+            map.on('zoomend', fetchAndDisplayFlights);
+            map.on('moveend', fetchAndDisplayFlights);
 
-    function addNote() {
-      const title = document.getElementById('title').value;
-      const description = document.getElementById('description').value;
-      const dateTime = new Date().toLocaleString();
+            map.on('click', function () {
+                document.getElementById('flight-details').innerHTML = '';
+            });
 
-      fetch('http://localhost:3000/api/announcements', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ title, description, dateTime })
-      })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error('Failed to add note');
+            fetchAndDisplayFlights(); // Display flights immediately
         }
-        return response.json();
-      })
-      .then(() => {
-        fetchNotes();
-        document.getElementById('announcementForm').reset();
-      })
-      .catch(error => console.error('Error:', error));
-    }
+        function fetchAndDisplayFlights() {
+            fetch('http://localhost:5000/get_active_flights', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    lat1: map.getBounds().getSouthWest().lat,
+                    lon1: map.getBounds().getSouthWest().lng,
+                    lat2: map.getBounds().getNorthEast().lat,
+                    lon2: map.getBounds().getNorthEast().lng
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Clear existing markers before adding new ones
+                map.eachLayer(layer => {
+                    if (layer instanceof L.Marker) {
+                        map.removeLayer(layer);
+                    }
+                });
 
-    function fetchNotes() {
-      fetch('http://localhost:3000/api/announcements')
-      .then(response => {
-        if (!response.ok) {
-          throw new Error('Failed to fetch notes');
+                let flights = data.flights;
+                let foundedSpectatedFlight = false;
+
+                for (let flightId in flights) {
+                    let flight = flights[flightId];
+                    
+                    if (flightId === spectatedFlightId) {
+                        displayFlightInfo(flight);
+                        foundedSpectatedFlight = true;
+                    }
+
+                    if (flight.aircraft_code === 'GRND') {
+                        var iconUrl = 'https://cdn2.iconfinder.com/data/icons/driverless-autonomous-electric-car/319/car-007-512.png';
+                        var iconWidth = 20; // 16 - 24
+                        var iconHeight = 20; // 16 - 24
+                        var htmlAfterIcon = `<p class="map-label-above-icon" style="bottom: ${iconHeight}px;">${flight.callsign}</p>`;
+                    } else {
+                        var iconUrl = 'https://cdn3.iconfinder.com/data/icons/remixicon-map/24/plane-line-256.png';
+                        var iconWidth = 30; // 24 - 36
+                        var iconHeight = 30; // 24 - 36
+                        var htmlAfterIcon = `<p class="map-label-above-icon" style="bottom: ${iconHeight}px;">${flight.callsign}</p>`;
+                    }
+
+                    try {
+                        let flightMarker = L.marker([flight.latitude, flight.longitude], {
+                            icon: createRotatedIcon(flight.heading, iconUrl, iconWidth, iconHeight, htmlAfterIcon),
+                            title: flight.aircraft_code
+                        }).addTo(map);
+
+                        // flightMarker.bindPopup(`
+                        //     <strong>${flight.aircraft_code} ${flight.number}</strong><br>
+                        //     Callsign: ${flight.callsign}<br>
+                        //     Altitude: ${flight.altitude} feet
+                        // `);
+
+                        flightMarker.on('click', () => {
+                            displayFlightInfo(flight);
+                            spectatedFlightId = flightId;
+                            foundedSpectatedFlight = true;
+                        });
+                    } catch (error) {
+                        console.error('Error:', error);
+                    }
+                }
+                if (foundedSpectatedFlight == false && spectatedFlightId != null) {
+                    hideFlightInfo();
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
         }
-        return response.json();
-      })
-      .then(data => {
-        displayNotes(data.announcements);
-      })
-      .catch(error => console.error('Error:', error));
-    }
+        function createRotatedIcon(angle, iconUrl, iconWidth, iconHeight, htmlAfterIcon) {
+            return L.divIcon({
+                html: `<img class="custom-icon" src="${iconUrl}" style="transform: rotate(${angle}deg);" width="${iconWidth}px" height="${iconHeight}px"/>${htmlAfterIcon}`,
+                iconSize: [iconWidth, iconHeight],
+                iconAnchor: [iconWidth / 2, iconHeight / 2]
+            });
+        }
+        function displayFlightInfo(flight) {
+            document.getElementById('flight-details').innerHTML = `
+                <strong>${flight.aircraft_code} ${flight.number}</strong><br>
+                Callsign: ${flight.callsign}<br>
+                Altitude: ${flight.altitude} feet
+            `;
+        }
+        function hideFlightInfo() {
+            document.getElementById('flight-details').innerHTML = '';
+            spectatedFlightId = null;
+            bellNotifier("The spectated flight was lost!");
+        }
+        function bellNotifier(message) {
+            // document.getElementById("bell-audio").volume = 0.5; // 50%
+            document.getElementById("bell-audio").play();
+            setTimeout(function() {
+                alert(message);
+                document.getElementById("bell-audio").load();
+            }, 0);
+        }
 
-    function editNote(id) {
-      const newTitle = prompt('Enter new title:');
-      const newDescription = prompt('Enter new description:');
-
-      if (newTitle && newDescription) {
-        const dateTime = new Date().toLocaleString();
-
-        fetch(`http://localhost:3000/api/announcements/${id}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ title: newTitle, description: newDescription, dateTime })
-        })
-        .then(response => {
-          if (!response.ok) {
-            throw new Error('Failed to edit note');
-          }
-          fetchNotes();
-        })
-        .catch(error => console.error('Error:', error));
-      }
-    }
-
-    function deleteNote(id) {
-      if (confirm('Are you sure you want to delete this note?')) {
-        fetch(`http://localhost:3000/api/announcements/${id}`, {
-          method: 'DELETE'
-        })
-        .then(response => {
-          if (!response.ok) {
-            throw new Error('Failed to delete note');
-          }
-          fetchNotes();
-        })
-        .catch(error => console.error('Error:', error));
-      }
-    }
-
-    // Display existing notes on page load
-    fetchNotes();
-    setInterval(fetchNotes, 1000);
-
-    // Event listener for form submission
-    document.getElementById('announcementForm').addEventListener('submit', function(event) {
-      event.preventDefault();
-      addNote();
-    });
-  </script>
+        var spectatedFlightId = null;
+        window.onload = initMap;
+        setInterval(fetchAndDisplayFlights, 5000); // Update flights every 5 seconds
+    </script>
 </body>
 </html>
+
+<!-- <!DOCTYPE html>
+<html>
+<head>
+    <title>Active Flights Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+    <style>
+        html {
+            height: 100%;
+        }
+        body {
+            margin-top: 0px;
+            height: 100%;
+        }
+        #map {
+            height: 60%;
+            width: 100%;
+        }
+        .airplane-icon, .ground_vehicle-icon {
+            transform-origin: center;
+        }
+        .leaflet-div-icon {
+            background-color: transparent;
+            border: 0px;
+        }
+        .map-label-above-icon {
+            margin: 0px;
+            position: absolute;
+            left: -16px;
+            right: -16px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script>
+        function initMap() {
+            map = L.map('map').setView([42.694771, 23.413245], 15);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            map.on('zoomend', fetchAndDisplayFlights);
+            map.on('moveend', fetchAndDisplayFlights);
+
+            fetchAndDisplayFlights(); // Display flights immediately
+        }
+        function fetchAndDisplayFlights() {
+            fetch('http://localhost:5000/get_active_flights', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                // body: JSON.stringify({
+                //     lat1: 42.704958, // N
+                //     lon1: 23.385136, // E
+                //     lat2: 42.685939, // N
+                //     lon2: 23.443887  // E
+                // })
+                body: JSON.stringify({
+                    lat1: map.getBounds().getSouthWest().lat,
+                    lon1: map.getBounds().getSouthWest().lng,
+                    lat2: map.getBounds().getNorthEast().lat,
+                    lon2: map.getBounds().getNorthEast().lng
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Clear existing markers before adding new ones
+                map.eachLayer(layer => {
+                    if (layer instanceof L.Marker) {
+                        map.removeLayer(layer);
+                    }
+                });
+
+                let flights = data.flights;
+
+                for (let flightId in flights) {
+                    let flight = flights[flightId];
+
+                    if (flight.aircraft_code === 'GRND') {
+                        var iconUrl = 'https://cdn2.iconfinder.com/data/icons/driverless-autonomous-electric-car/319/car-007-512.png';
+                        var iconWidth = 20; // 16 - 24
+                        var iconHeight = 20; // 16 - 24
+                        var htmlAfterIcon = `<p class="map-label-above-icon" style="bottom: ${iconHeight}px;">${flight.callsign}</p>`;
+                    } else {
+                        var iconUrl = 'https://cdn3.iconfinder.com/data/icons/remixicon-map/24/plane-line-256.png';
+                        var iconWidth = 30; // 24 - 36
+                        var iconHeight = 30; // 24 - 36
+                        var htmlAfterIcon = `<p class="map-label-above-icon" style="bottom: ${iconHeight}px;">${flight.callsign}</p>`;
+                    }
+
+                    const flightMarker = L.marker([flight.latitude, flight.longitude], {
+                        icon: createRotatedIcon(flight.heading, iconUrl, iconWidth, iconHeight, htmlAfterIcon),
+                        title: flight.aircraft_code
+                    }).addTo(map);
+
+                    // flightMarker.bindPopup(`
+                    //     <strong>${flight.aircraft_code} ${flight.number}</strong><br>
+                    //     Callsign: ${flight.callsign}<br>
+                    //     Altitude: ${flight.altitude} feet
+                    // `);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+        function createRotatedIcon(angle, iconUrl, iconWidth, iconHeight, htmlAfterIcon) {
+            return L.divIcon({
+                html: `<img class="custom-icon" src="${iconUrl}" style="transform: rotate(${angle}deg);" width="${iconWidth}px" height="${iconHeight}px"/>${htmlAfterIcon}`,
+                iconSize: [iconWidth, iconHeight],
+                iconAnchor: [iconWidth / 2, iconHeight / 2]
+            });
+        }
+
+        window.onload = initMap;
+        setInterval(fetchAndDisplayFlights, 5000); // Update flights every 5 seconds
+    </script>
+</body>
+</html> -->
+
+<!-- <!DOCTYPE html>
+<html>
+<head>
+    <title>Active Flights Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+    <style>
+        html {
+            height: 100%;
+        }
+        body {
+            margin-top: 0px;
+            height: 100%;
+        }
+        #map {
+            height: 60%;
+            width: 100%;
+        }
+        .airplane-icon, .ground_vehicle-icon {
+            transform-origin: center;
+        }
+        .leaflet-div-icon {
+            background-color: transparent;
+            border: 0px;
+        }
+        .map-label-above-icon {
+            margin: 0px;
+            position: absolute;
+            left: -16px;
+            right: -16px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script>
+        function createRotatedIcon(angle, iconUrl, iconWidth, iconHeight, htmlAfterIcon) {
+            return L.divIcon({
+                html: `<img class="custom-icon" src="${iconUrl}" style="transform: rotate(${angle}deg);" width="${iconWidth}px" height="${iconHeight}px"/>${htmlAfterIcon}`,
+                iconSize: [iconWidth, iconHeight],
+                iconAnchor: [iconWidth / 2, iconHeight / 2]
+            });
+        }
+        function initMap() {
+            const map = L.map('map').setView([42.694771, 23.413245], 15);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            const openPopups = {}; // Object to store open popup references
+
+            function fetchAndDisplayFlights() {
+                fetch('http://localhost:5000/get_active_flights', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        lat1: 42.704958, // N
+                        lon1: 23.385136, // E
+                        lat2: 42.685939, // N
+                        lon2: 23.443887  // E
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    // Store references to currently open popups and their corresponding marker IDs
+                    const openPopupsBeforeUpdate = {};
+                    for (const markerId in openPopups) {
+                        const marker = openPopups[markerId];
+                        if (marker.isPopupOpen()) {
+                            openPopupsBeforeUpdate[markerId] = marker.getPopup();
+                        }
+                    }
+
+                    // Clear existing markers before adding new ones
+                    map.eachLayer(layer => {
+                        if (layer instanceof L.Marker) {
+                            map.removeLayer(layer);
+                        }
+                    });
+
+                    const flights = data.flights;
+
+                    for (const flightId in flights) {
+                        const flight = flights[flightId];
+
+                        let iconUrl, iconWidth, iconHeight, htmlAfterIcon;
+
+                        if (flight.aircraft_code === 'GRND') {
+                            iconUrl = 'https://cdn2.iconfinder.com/data/icons/driverless-autonomous-electric-car/319/car-007-512.png';
+                            iconWidth = 20; // 16 - 24
+                            iconHeight = 20; // 16 - 24
+                            htmlAfterIcon = `<p class="map-label-above-icon" style="bottom: ${iconHeight}px;">${flight.callsign}</p>`;
+                        } else {
+                            iconUrl = 'https://cdn3.iconfinder.com/data/icons/remixicon-map/24/plane-line-256.png';
+                            iconWidth = 30; // 24 - 36
+                            iconHeight = 30; // 24 - 36
+                            htmlAfterIcon = `<p class="map-label-above-icon" style="bottom: ${iconHeight}px;">${flight.callsign}</p>`;
+                        }
+
+                        const flightMarker = L.marker([flight.latitude, flight.longitude], {
+                            icon: createRotatedIcon(flight.heading, iconUrl, iconWidth, iconHeight, htmlAfterIcon),
+                            title: flight.aircraft_code
+                        }).addTo(map);
+
+                        flightMarker.bindPopup(`
+                            <strong>${flight.aircraft_code} ${flight.number}</strong><br>
+                            Callsign: ${flight.callsign}<br>
+                            Altitude: ${flight.altitude} feet
+                        `);
+
+                        // const markerId = flightId; // Unique marker ID
+                        if (openPopupsBeforeUpdate[flightId]) {
+                            // Reopen the popup if it was open before the update
+                            flightMarker.openPopup();
+                            openPopups[flightId] = flightMarker;
+                        }
+
+                        // Store references to open popups
+                        flightMarker.on('popupopen', () => {
+                            openPopups[flightId] = flightMarker;
+                        });
+                        flightMarker.on('popupclose', () => {
+                            delete openPopups[flightId];
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                });
+            }
+
+            fetchAndDisplayFlights(); // Display flights immediately
+
+            setInterval(fetchAndDisplayFlights, 1000); // Update flights every second
+        }
+        window.onload = initMap;
+    </script>
+</body>
+</html> -->
+
+<!-- <!DOCTYPE html>
+<html>
+<head>
+    <title>Active Flights Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+    <style>
+        html {
+            height: 100%;
+        }
+        body {
+            margin-top: 0px;
+            height: 100%;
+        }
+        #map {
+            height: 60%;
+            width: 100%;
+        }
+        .airplane-icon, .ground_vehicle-icon {
+            transform-origin: center;
+        }
+        .leaflet-div-icon {
+            background-color: transparent;
+            border: 0px;
+        }
+        .map-label-above-icon {
+            margin: 0px;
+            position: absolute;
+            left: -16px;
+            right: -16px;
+            text-align: center;
+            /* background: rgba(0, 0, 0, 0.5);
+            border-radius: 5px; */
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script>
+        function createRotatedIcon(angle, iconUrl, iconWidth, iconHeight, htmlAfterIcon) {
+            return L.divIcon({
+                html: `<img class="custom-icon" src="${iconUrl}" style="transform: rotate(${angle}deg);" width="${iconWidth}px" height="${iconHeight}px"/>${htmlAfterIcon}`,
+                iconSize: [iconWidth, iconHeight],
+                iconAnchor: [iconWidth / 2, iconHeight / 2]
+            });
+        }
+        function initMap() {
+            const map = L.map('map').setView([42.694771, 23.413245], 15);
+
+            // Default view (includes text on the map)
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            // Dark theme
+            // L.tileLayer('https://tile.jawg.io/jawg-dark/{z}/{x}/{y}{r}.png?access-token=ab0FVKB5TPyRTNgAWLJ40t0rc0OwiAp51KooZ1cjpnRyFbwZG5XDcTavBDZXiKRh', {
+            //     attribution: '&copy; <a href="https://www.jawg.io?utm_medium=map&utm_source=attribution" target="_blank">Jawg</a> - &copy; <a href="https://www.openstreetmap.org?utm_medium=map-attribution&utm_source=jawg" target="_blank">OpenStreetMap</a> contributors'
+            // }).addTo(map);
+
+            // Satelite view
+            // L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            //     attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+            // }).addTo(map);
+
+            fetch('http://localhost:5000/get_active_flights', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    lat1: 42.704958, // N
+                    lon1: 23.385136, // E
+                    lat2: 42.685939, // N
+                    lon2: 23.443887  // E
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                const flights = data.flights;
+
+                for (const flightId in flights) {
+                    const flight = flights[flightId];
+
+                    if (flight.aircraft_code === 'GRND') {
+                        iconUrl = 'https://cdn2.iconfinder.com/data/icons/driverless-autonomous-electric-car/319/car-007-512.png';
+                        iconWidth = 20; // 16 - 24
+                        iconHeight = 20; // 16 - 24
+                        htmlAfterIcon = `<p class="map-label-above-icon" style="bottom: ${iconHeight}px;">${flight.callsign}</p>`;
+
+                        flightMarker = L.marker([flight.latitude, flight.longitude], {
+                            icon: createRotatedIcon(flight.heading, iconUrl, iconWidth, iconHeight, htmlAfterIcon),
+                            title: flight.aircraft_code
+                        }).addTo(map);
+                    }
+                    else {
+                        iconUrl = 'https://cdn3.iconfinder.com/data/icons/remixicon-map/24/plane-line-256.png';
+                        iconWidth = 30; // 24 - 36
+                        iconHeight = 30; // 24 - 36
+                        htmlAfterIcon = `<p class="map-label-above-icon" style="bottom: ${iconHeight}px;">${flight.callsign}</p>`;
+
+                        flightMarker = L.marker([flight.latitude, flight.longitude], {
+                            icon: createRotatedIcon(flight.heading, iconUrl, iconWidth, iconHeight, htmlAfterIcon),
+                            title: flight.aircraft_code
+                        }).addTo(map);
+                    }
+
+                    flightMarker.bindPopup(`
+                        <strong>${flight.aircraft_code} ${flight.number}</strong><br>
+                        Callsign: ${flight.callsign}<br>
+                        Altitude: ${flight.altitude} feet
+                    `);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+        window.onload = initMap;
+        // setInterval(initMap, 1000);
+    </script>
+</body>
+</html> -->
